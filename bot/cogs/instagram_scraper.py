@@ -69,6 +69,7 @@ from bot.database import (
     is_already_posted,
     mark_as_posted,
     update_last_media_id,
+    log_stat_post,
 )
 
 # ── Logger del módulo ─────────────────────────────────────────────────────────────────────────────
@@ -580,7 +581,7 @@ class InstagramScraperCog(commands.Cog, name="Instagram"):
             except Exception as exc:
                 log.exception(
                     "[FeedLoop] Error inesperado en feed #%d (@%s): %s",
-                    feed["id"], feed["instagram_account"], exc,
+                                    feed["id"], feed["ig_account"], exc,
                 )
 
         # Completar el primer ciclo (a partir de ahora sí se publican)
@@ -609,8 +610,10 @@ class InstagramScraperCog(commands.Cog, name="Instagram"):
         1. Primer ciclo: marcar TODAS como vistas sin publicar (evita spam al arrancar).
         2. Ciclos siguientes: publicar solo las que no están en la BD.
         """
-        account: str = feed["instagram_account"]
+                account: str = feed["ig_account"]
         feed_id: int = feed["id"]
+                guild_id: int = feed["guild_id"]
+                content_type: str = feed.get("content_type", "all") or "all"
 
         medias = await self.ig.get_recent_medias(account, amount=MAX_POSTS_PER_CYCLE)
         if not medias:
@@ -623,6 +626,13 @@ class InstagramScraperCog(commands.Cog, name="Instagram"):
 
         for media in medias:
             media_id = str(getattr(media, "pk", ""))
+                        media_type = getattr(media, "media_type", 1)
+
+                        # ── Filtro por content_type del feed (gestionado desde el panel web) ───────
+                        if content_type == "posts" and media_type == 2:
+                                            continue   # Solo posts: saltar reels
+                                        if content_type == "reels" and media_type != 2:
+                                                            continue   # Solo reels: saltar posts/fotos
 
             # Anti-duplicados: saltar si ya fue publicada
             if await is_already_posted(feed_id, media_id):
@@ -634,7 +644,7 @@ class InstagramScraperCog(commands.Cog, name="Instagram"):
                 continue
 
             # Obtener canal de destino
-            channel_id: int = feed["channel_id"]
+                        channel_id: int = int(feed["channel_id"])
             channel = self.bot.get_channel(channel_id)
             if channel is None:
                 log.warning("[Feed #%d] Canal %s no encontrado. ¿Eliminado?", feed_id, channel_id)
@@ -652,6 +662,7 @@ class InstagramScraperCog(commands.Cog, name="Instagram"):
                 await channel.send(content=contenido, embed=embed, view=view)
                 await mark_as_posted(feed_id, media_id)
                 await update_last_media_id(feed_id, media_id)
+                                await log_stat_post(guild_id, feed_id, media_type)
                 log.info("[Feed #%d] ✅ Publicado media %s de @%s", feed_id, media_id, account)
             except discord.Forbidden:
                 log.error("[Feed #%d] ❌ Sin permisos en canal %s.", feed_id, channel_id)
